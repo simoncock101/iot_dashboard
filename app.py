@@ -9,15 +9,12 @@ import plotly.express as px
 # CONFIGURACIÓN ORIGINAL
 # ---------------------------
 url = "https://us-east-1-1.aws.cloud2.influxdata.com"
-
-# Conserva aquí tu token actual
-token = "PEGA_AQUI_TU_TOKEN_EXISTENTE"
-
+token = "5FESPQw5t4qA4GgZmyeZ9mu7u1sbtauo4Hh8tjRi1E8sdrIgzXAX5ESk4n5MmcpAjJWEGgEKklFX0LNasnUmng=="
 org = "miguelcmo"
 bucket = "iot_telemetry_data"
 
 # ---------------------------
-# CONFIGURACIÓN STREAMLIT
+# STREAMLIT UI
 # ---------------------------
 st.set_page_config(
     page_title="IoT Dashboard",
@@ -47,7 +44,6 @@ st.markdown("""
     border-right: 1px solid #DCE3ED;
 }
 
-/* Títulos principales */
 h1, h2, h3 {
     color: #17233C !important;
     font-weight: 700 !important;
@@ -75,7 +71,6 @@ h1, h2, h3 {
     margin-bottom: 12px;
 }
 
-/* Barra lateral */
 [data-testid="stSidebar"] p,
 [data-testid="stSidebar"] label,
 [data-testid="stSidebar"] span {
@@ -88,7 +83,6 @@ h1, h2, h3 {
     line-height: 1.7;
 }
 
-/* Tarjetas de métricas */
 .metric-card {
     background: #FFFFFF;
     border: 1px solid #DCE3ED;
@@ -118,7 +112,6 @@ h1, h2, h3 {
     color: #526078;
 }
 
-/* Gráficos */
 [data-testid="stPlotlyChart"] {
     background: #FFFFFF;
     border: 1px solid #DCE3ED;
@@ -127,14 +120,12 @@ h1, h2, h3 {
     box-shadow: 0 4px 15px rgba(25, 42, 70, 0.04);
 }
 
-/* Tabla */
 [data-testid="stDataFrame"] {
     border: 1px solid #DCE3ED;
     border-radius: 12px;
     overflow: hidden;
 }
 
-/* Pie de página */
 .footer {
     color: #596981;
     text-align: center;
@@ -163,7 +154,6 @@ st.markdown(
 # BARRA LATERAL
 # ---------------------------
 st.sidebar.markdown("## 🌐 IoT Monitor")
-
 st.sidebar.markdown(
     '<div class="sidebar-note">Panel de monitoreo ambiental</div>',
     unsafe_allow_html=True
@@ -185,7 +175,6 @@ refresh = st.sidebar.slider(
 
 st.sidebar.divider()
 st.sidebar.markdown("### 📡 Fuente de datos")
-
 st.sidebar.markdown(
     '<div class="sidebar-note">'
     'InfluxDB Cloud<br>'
@@ -196,74 +185,57 @@ st.sidebar.markdown(
 )
 
 # ---------------------------
-# FUNCIÓN DE CARGA ORIGINAL
+# FUNCIÓN DE CARGA DE DATOS
 # ---------------------------
 @st.cache_data(ttl=10)
 def load_data(time_range):
-    client = InfluxDBClient(
+    query = f'''
+    from(bucket: "{bucket}")
+      |> range(start: {time_range})
+      |> filter(fn: (r) =>
+          r["_field"] == "temperature" or
+          r["_field"] == "humidity")
+      |> pivot(
+          rowKey: ["_time"],
+          columnKey: ["_field"],
+          valueColumn: "_value"
+      )
+      |> keep(columns: ["_time", "temperature", "humidity"])
+    '''
+
+    with InfluxDBClient(
         url=url,
         token=token,
         org=org
-    )
+    ) as client:
+        result = client.query_api().query_data_frame(query)
 
-    try:
-        query_api = client.query_api()
+    if isinstance(result, list):
+        frames = [frame for frame in result if not frame.empty]
+        if not frames:
+            return pd.DataFrame()
+        df = pd.concat(frames, ignore_index=True)
+    else:
+        df = result
 
-        query = f'''
-        from(bucket: "{bucket}")
-          |> range(start: {time_range})
-          |> filter(fn: (r) =>
-              r["_field"] == "temperature" or
-              r["_field"] == "humidity")
-          |> pivot(
-              rowKey: ["_time"],
-              columnKey: ["_field"],
-              valueColumn: "_value"
-          )
-          |> keep(columns: ["_time", "temperature", "humidity"])
-        '''
-
-        result = query_api.query_data_frame(query)
-
-        if isinstance(result, list):
-            if not result:
-                return pd.DataFrame()
-
-            df = pd.concat(result, ignore_index=True)
-        else:
-            df = result
-
-        if df.empty:
-            return df
-
-        df["_time"] = pd.to_datetime(df["_time"])
-
-        for column in ["temperature", "humidity"]:
-            if column in df.columns:
-                df[column] = pd.to_numeric(
-                    df[column], errors="coerce"
-                )
-
-        df = df.sort_values("_time")
-
+    if df.empty:
         return df
 
-    finally:
-        client.close()
+    df["_time"] = pd.to_datetime(df["_time"])
+
+    for column in ["temperature", "humidity"]:
+        if column in df.columns:
+            df[column] = pd.to_numeric(
+                df[column], errors="coerce"
+            )
+
+    return df.sort_values("_time")
 
 # ---------------------------
-# CARGA DE DATOS
+# CARGAR DATOS
 # ---------------------------
-if token == "PEGA_AQUI_TU_TOKEN_EXISTENTE" or not token:
-    st.error(
-        "Pega tu token actual de InfluxDB en la variable token "
-        "al inicio del código."
-    )
-    st.stop()
-
 try:
     df = load_data(time_range)
-
 except Exception as e:
     st.error("No se pudieron cargar los datos de InfluxDB.")
     with st.expander("Ver detalle del error"):
@@ -311,29 +283,23 @@ if not df.empty:
             """, unsafe_allow_html=True)
 
 # ---------------------------
-# CONFIGURACIÓN COMPARTIDA
-# DE LOS GRÁFICOS
+# ESTILO DE LOS GRÁFICOS
 # ---------------------------
 chart_layout = dict(
     template="plotly_white",
     paper_bgcolor="#FFFFFF",
     plot_bgcolor="#FFFFFF",
-
     font=dict(
         family="Arial, sans-serif",
         size=14,
         color="#263449"
     ),
-
     title=dict(
         font=dict(size=20, color="#17233C"),
         x=0.02
     ),
-
     margin=dict(l=35, r=25, t=75, b=40),
-
     hovermode="x unified",
-
     legend=dict(
         orientation="h",
         yanchor="bottom",
@@ -342,7 +308,6 @@ chart_layout = dict(
         x=0,
         font=dict(size=13, color="#263449")
     ),
-
     xaxis=dict(
         title=dict(
             text="Fecha y hora",
@@ -352,7 +317,6 @@ chart_layout = dict(
         showgrid=False,
         automargin=True
     ),
-
     yaxis=dict(
         title=dict(
             text="Lectura",
@@ -365,12 +329,15 @@ chart_layout = dict(
     )
 )
 
+color_map = {
+    "temperature": "#E87532",
+    "humidity": "#2868D8"
+}
+
 # ---------------------------
-# GRÁFICOS
+# GRÁFICO PRINCIPAL
 # ---------------------------
 if not df.empty:
-
-    # Gráfico de serie de tiempo
     st.markdown(
         '<div class="section-title">📈 Serie de tiempo</div>',
         unsafe_allow_html=True
@@ -386,19 +353,13 @@ if not df.empty:
             "value": "Lectura",
             "variable": "Sensor"
         },
-        color_discrete_map={
-            "temperature": "#E87532",
-            "humidity": "#2868D8"
-        }
+        color_discrete_map=color_map
     )
 
     fig.update_layout(**chart_layout)
     fig.update_traces(line=dict(width=2.5))
 
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
+    st.plotly_chart(fig, use_container_width=True)
 
     # ---------------------------
     # PROMEDIO CADA 10 MINUTOS
@@ -409,15 +370,6 @@ if not df.empty:
         '</div>',
         unsafe_allow_html=True
     )
-
-    df["temperature"] = pd.to_numeric(
-        df["temperature"], errors="coerce"
-    )
-    df["humidity"] = pd.to_numeric(
-        df["humidity"], errors="coerce"
-    )
-
-    df["_time"] = pd.to_datetime(df["_time"])
 
     df_resampled = (
         df.set_index("_time")[["temperature", "humidity"]]
@@ -437,10 +389,7 @@ if not df.empty:
                 "value": "Promedio",
                 "variable": "Sensor"
             },
-            color_discrete_map={
-                "temperature": "#E87532",
-                "humidity": "#2868D8"
-            }
+            color_discrete_map=color_map
         )
 
         layout2 = chart_layout.copy()
@@ -458,10 +407,7 @@ if not df.empty:
         fig2.update_layout(**layout2)
         fig2.update_traces(line=dict(width=2.5))
 
-        st.plotly_chart(
-            fig2,
-            use_container_width=True
-        )
+        st.plotly_chart(fig2, use_container_width=True)
     else:
         st.info("No hay datos suficientes para calcular los promedios.")
 
@@ -494,9 +440,7 @@ if not df.empty:
     )
 
 else:
-    st.warning(
-        "No hay datos disponibles en este rango de tiempo."
-    )
+    st.warning("No hay datos disponibles en este rango de tiempo.")
 
 # ---------------------------
 # PIE DE PÁGINA
@@ -514,5 +458,4 @@ st.markdown(
 if refresh > 0:
     time.sleep(refresh)
     st.rerun()
-
 
